@@ -117,13 +117,18 @@ def step_enhance_audio(src, output_dir, log):
 def step_subtitles(src, output_dir, log):
     """4. Genera subtítulos con Whisper y los incrusta."""
     log("\n📝 Paso 4: Generando subtítulos (Whisper)...\n")
+
+    # Agregar ffmpeg al PATH para que Whisper lo encuentre
+    ffmpeg = get_ffmpeg()
+    if ffmpeg:
+        ffmpeg_dir = os.path.dirname(ffmpeg)
+        os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+
     try:
         import whisper
     except ImportError:
         log("⚠️  Whisper no instalado. Saltando subtítulos.\n")
         return src
-
-    ffmpeg = get_ffmpeg()
 
     # Extraer audio para Whisper
     audio_path = os.path.join(output_dir, "_audio.wav")
@@ -133,8 +138,9 @@ def step_subtitles(src, output_dir, log):
     model = whisper.load_model("small")
     result = model.transcribe(audio_path, language="es", task="transcribe")
 
-    # Guardar SRT
-    srt_path = os.path.join(output_dir, "subtitles.srt")
+    # Guardar SRT en carpeta TEMP para evitar paths con caracteres especiales
+    import tempfile
+    srt_path = os.path.join(tempfile.gettempdir(), "subtitles_ft.srt")
     with open(srt_path, "w", encoding="utf-8") as f:
         for i, seg in enumerate(result["segments"], 1):
             def ts(s):
@@ -144,15 +150,21 @@ def step_subtitles(src, output_dir, log):
                 return f"{h:02d}:{m:02d}:{sec:02d},{ms:03d}"
             f.write(f"{i}\n{ts(seg['start'])} --> {ts(seg['end'])}\n{seg['text'].strip()}\n\n")
 
-    log(f"  ✅ SRT guardado en {srt_path}\n")
+    # Copiar SRT también a la carpeta de salida para referencia
+    import shutil
+    shutil.copy(srt_path, os.path.join(output_dir, "subtitles.srt"))
+    log(f"  ✅ SRT guardado en {output_dir}\\subtitles.srt\n")
 
-    # Incrustar subtítulos
+    # Incrustar subtítulos (usar path TEMP sin caracteres especiales)
     dst = os.path.join(output_dir, "04_with_subtitles.mp4")
     srt_escaped = srt_path.replace("\\", "/").replace(":", "\\:")
     cmd = [ffmpeg, "-y", "-i", src,
            "-vf", f"subtitles='{srt_escaped}':force_style='FontName=Arial,FontSize=18,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,Outline=2'",
            "-c:a", "copy", dst]
-    run_cmd(cmd, log)
+    rc = run_cmd(cmd, log)
+    if rc != 0:
+        log("⚠️  No se pudieron incrustar subtítulos en el video. El SRT está guardado por separado.\n")
+        return src
     return dst
 
 
