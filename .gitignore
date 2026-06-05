@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+output/
+input_clips/
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wav
+_clip_list.txt
+.env
