@@ -21,12 +21,19 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+FFMPEG_PATH = r"C:\Users\nicolas.sorabilla\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-full_build\bin\ffmpeg.exe"
+
 def get_ffmpeg():
-    """Devuelve el path a ffmpeg (busca en PATH y en carpeta local)."""
+    """Devuelve el path a ffmpeg."""
     import shutil
+    # 1. PATH del sistema
     path = shutil.which("ffmpeg")
     if path:
         return path
+    # 2. Path conocido de winget
+    if os.path.exists(FFMPEG_PATH):
+        return FFMPEG_PATH
+    # 3. Carpeta local del proyecto
     local = os.path.join(BASE_DIR, "ffmpeg", "bin", "ffmpeg.exe")
     if os.path.exists(local):
         return local
@@ -251,11 +258,16 @@ class App(ctk.CTk):
             self.output_dir.set(d)
 
     def _get_clips(self, folder):
+        import re
         exts = ("*.mp4", "*.mov", "*.avi", "*.mkv", "*.webm")
         clips = []
         for ext in exts:
             clips.extend(glob.glob(os.path.join(folder, ext)))
-        return sorted(clips)
+        # Orden natural: 1, 2, 3... 13 (no alfabético)
+        def natural_key(s):
+            parts = re.split(r'(\d+)', os.path.basename(s))
+            return [int(p) if p.isdigit() else p.lower() for p in parts]
+        return sorted(clips, key=natural_key)
 
     def _log(self, text):
         self.log_box.configure(state="normal")
