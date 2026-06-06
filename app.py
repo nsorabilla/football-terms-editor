@@ -58,33 +58,49 @@ def step_merge(clips, output_dir, log):
         log("❌ ffmpeg no encontrado.\n")
         return None
 
+    import tempfile
+
     log(f"  Clips a procesar: {len(clips)}\n")
     for c in clips:
         log(f"  • {os.path.basename(c)}\n")
 
-    # Construir filtro concat para re-encodar todo con sync correcto
-    inputs = []
-    for c in clips:
-        inputs += ["-i", c]
+    # Paso 1a: re-encodar cada clip a formato uniforme en carpeta TEMP
+    # Esto elimina diferencias de codec/framerate y evita problemas con paths especiales
+    temp_dir = tempfile.mkdtemp()
+    normalized = []
+    for i, clip in enumerate(clips):
+        out = os.path.join(temp_dir, f"clip_{i:03d}.mp4")
+        cmd = [ffmpeg, "-y", "-i", clip,
+               "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+               "-vf", "fps=30,scale=trunc(iw/2)*2:trunc(ih/2)*2",
+               "-c:a", "aac", "-b:a", "192k", "-ar", "44100",
+               "-vsync", "cfr",   # framerate constante = sync perfecto
+               out]
+        rc = run_cmd(cmd, log)
+        if rc == 0:
+            normalized.append(out)
+        else:
+            log(f"  ⚠️ Error normalizando {os.path.basename(clip)}, se omite.\n")
 
-    n = len(clips)
-    filter_v = "".join(f"[{i}:v:0]" for i in range(n)) + f"concat=n={n}:v=1:a=1[outv][outa]"
+    if not normalized:
+        log("❌ Ningún clip pudo normalizarse.\n")
+        return None
+
+    # Paso 1b: unir los clips normalizados con concat (paths simples, sin chars especiales)
+    list_file = os.path.join(temp_dir, "list.txt")
+    with open(list_file, "w") as f:
+        for p in normalized:
+            f.write(f"file '{p}'\n")
 
     merged = os.path.join(output_dir, "01_merged.mp4")
-    cmd = (
-        [ffmpeg, "-y"] +
-        inputs +
-        ["-filter_complex", filter_v,
-         "-map", "[outv]", "-map", "[outa]",
-         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-         "-c:a", "aac", "-b:a", "192k",
-         "-async", "1",          # fuerza sync audio/video
-         merged]
-    )
-    rc = run_cmd(cmd, log)
+    cmd2 = [ffmpeg, "-y", "-f", "concat", "-safe", "0",
+            "-i", list_file, "-c", "copy", merged]
+    rc = run_cmd(cmd2, log)
     if rc != 0:
-        log("❌ Error al unir clips.\n")
+        log("❌ Error al unir clips normalizados.\n")
         return None
+
+    log(f"  ✅ Merge completado: {merged}\n")
     return merged
 
 
