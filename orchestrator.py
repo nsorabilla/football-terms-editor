@@ -208,12 +208,18 @@ class OrchestratorApp(ctk.CTk):
             video_report = video_run(video)
             report["analisis_video"] = video_report
             if video_report["approved"]:
-                self._log("  ✅ Video aprobado — calidad OK\n")
-                self._set_agent("video_check", "ok")
+                warnings = video_report.get("warnings", [])
+                self._log("  ✅ Video aprobado\n")
+                for w in warnings:
+                    self._log(f"  ⚠️ Advertencia: {w}\n")
+                self._set_agent("video_check", "ok" if not warnings else "warn")
             else:
-                issues = "; ".join(video_report["issues"])
-                self._log(f"  ⚠️ Video con advertencias: {issues}\n")
-                self._set_agent("video_check", "warn")
+                self._set_agent("video_check", "error")
+                self._log("  ❌ Video RECHAZADO. Problemas bloqueantes:\n")
+                for b in video_report.get("blockers", []):
+                    self._log(f"     • {b}\n")
+                self._log("\n🛑 Pipeline detenido. Corregí los problemas y volvé a intentar.\n")
+                return
             self.progress.set(3 / total)
 
             # Transcripción compartida (usada por agente 5)
