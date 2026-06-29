@@ -134,18 +134,16 @@ def step_enhance_video(src, output_dir, log):
 
     is_vertical, w, h = detect_orientation(src, log)
 
-    # Filtros de calidad (aplican igual a ambas orientaciones)
+    # Filtros de calidad — sutiles y naturales, no artificiales
+    # contrast/brightness/saturation leves para no verse "filtrado"
     quality_filters = (
-        "eq=contrast=1.2:brightness=0.06:saturation=1.3:gamma=1.08,"
-        "unsharp=5:5:1.5:3:3:0,"
-        "hue=s=1.15"
+        "eq=contrast=1.08:brightness=0.02:saturation=1.12:gamma=1.03,"
+        "unsharp=3:3:0.6:3:3:0"
     )
 
     if is_vertical:
-        # Video vertical: mantener 9:16, escalar a 1080x1920
         vf = f"{quality_filters},scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2"
     else:
-        # Video horizontal: mantener 16:9, escalar a 1920x1080
         vf = f"{quality_filters},scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2"
 
     cmd = [ffmpeg, "-y", "-i", src,
@@ -211,6 +209,16 @@ def step_subtitles(src, output_dir, log):
     model = whisper.load_model("small")
     result = model.transcribe(audio_path, language="es", task="transcribe")
 
+    # Corregir nombres y términos de fútbol en los segmentos
+    log("  ✏️ Corrigiendo nombres y términos...\n")
+    try:
+        sys.path.insert(0, BASE_DIR)
+        from agents.subtitle_corrector import correct_segments
+        segments = correct_segments(result["segments"])
+    except Exception as e:
+        log(f"  ⚠️ Corrector no disponible: {e}\n")
+        segments = result["segments"]
+
     import tempfile, shutil
 
     def ts(s):
@@ -221,7 +229,7 @@ def step_subtitles(src, output_dir, log):
 
     srt_path = os.path.join(tempfile.gettempdir(), "subtitles_ft.srt")
     with open(srt_path, "w", encoding="utf-8") as f:
-        for i, seg in enumerate(result["segments"], 1):
+        for i, seg in enumerate(segments, 1):
             f.write(f"{i}\n{ts(seg['start'])} --> {ts(seg['end'])}\n{seg['text'].strip()}\n\n")
 
     shutil.copy(srt_path, os.path.join(output_dir, "subtitles.srt"))
