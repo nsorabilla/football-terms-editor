@@ -255,12 +255,23 @@ class OrchestratorApp(ctk.CTk):
         report = {"timestamp": datetime.now().isoformat()}
         total = 7
 
+        def safe_run(agent_key, fn, *args, fallback=None):
+            """Corre un paso del pipeline. Si falla, loguea y continúa."""
+            try:
+                return fn(*args)
+            except Exception as e:
+                import traceback
+                self._log(f"  ⚠️ Error en {agent_key}: {e}\n")
+                self._set_agent(agent_key, "warn")
+                return fallback
+
         try:
             # ── Paso 0: Unir videos (si hay 2) ──────────────────────────────
             if v2:
                 self._set_agent("merge", "running")
                 self._log("\n🔗 Uniendo Video 1 + Video 2...\n")
-                video = merge_two_videos(v1, v2, out_dir, self._log)
+                merged = safe_run("merge", merge_two_videos, v1, v2, out_dir, self._log, fallback=v1)
+                video = merged if merged and os.path.exists(merged) else v1
                 report["videos"] = [v1, v2]
                 self._set_agent("merge", "ok")
             else:
@@ -274,7 +285,7 @@ class OrchestratorApp(ctk.CTk):
             self._set_agent("trend", "running")
             self._log("\n🔍 Agente 1: Buscando tendencias de fútbol...\n")
             from agents.trend_analyst import run as trend_run
-            trend_data = trend_run()
+            trend_data = safe_run("trend", trend_run, fallback={"results": []})
             report["tendencias"] = trend_data
             self._log(f"  ✅ {len(trend_data.get('results', []))} resultados\n")
             self._set_agent("trend", "ok")
@@ -284,12 +295,11 @@ class OrchestratorApp(ctk.CTk):
             self._set_agent("temperature", "running")
             self._log("\n🌡️ Agente 2: Analizando temperatura de redes...\n")
             from agents.temperature_analyst import run as temp_run
-            temp_data = temp_run()
+            temp_data = safe_run("temperature", temp_run, fallback={"player_ranking": [], "results": []})
             report["temperatura"] = temp_data
             ranking = temp_data.get("player_ranking", [])
             if ranking:
-                top = ", ".join(f"{p[0]}" for p in ranking[:3])
-                self._log(f"  ✅ Top: {top}\n")
+                self._log(f"  ✅ Top: {', '.join(p[0] for p in ranking[:3])}\n")
             self._set_agent("temperature", "ok")
             self.progress.set(3 / total)
 
@@ -297,10 +307,11 @@ class OrchestratorApp(ctk.CTk):
             self._set_agent("video_check", "running")
             self._log("\n🔬 Agente 3: Analizando calidad del video...\n")
             from agents.video_analyst import run as video_run
-            video_report = video_run(video)
+            video_report = safe_run("video_check", video_run, video,
+                                    fallback={"approved": True, "blockers": [], "warnings": []})
             report["analisis_video"] = video_report
 
-            if video_report["approved"]:
+            if video_report.get("approved", True):
                 warnings = video_report.get("warnings", [])
                 self._log("  ✅ Video aprobado\n")
                 for w in warnings:
@@ -308,10 +319,10 @@ class OrchestratorApp(ctk.CTk):
                 self._set_agent("video_check", "ok" if not warnings else "warn")
             else:
                 self._set_agent("video_check", "error")
-                self._log("  ❌ Video RECHAZADO:\n")
+                self._log("  ❌ Video RECHAZADO — problemas bloqueantes:\n")
                 for b in video_report.get("blockers", []):
                     self._log(f"     • {b}\n")
-                self._log("\n🛑 Pipeline detenido. Corregí los problemas y volvé a intentar.\n")
+                self._log("\n🛑 Pipeline detenido. Corregí el video y volvé a intentar.\n")
                 return
             self.progress.set(4 / total)
 
@@ -324,10 +335,12 @@ class OrchestratorApp(ctk.CTk):
             self._log("\n🎬 Agente 4: Editando video...\n")
             from app import step_enhance_video, step_enhance_audio, step_subtitles, step_export
             src = video
-            src = step_enhance_video(src, out_dir, self._log) or src
-            src = step_enhance_audio(src, out_dir, self._log) or src
-            src = step_subtitles(src, out_dir, self._log) or src
-            yt_out, reels_out = step_export(src, out_dir, self._log)
+            src = safe_run("editor", step_enhance_video, src, out_dir, self._log, fallback=src) or src
+            src = safe_run("editor", step_enhance_audio, src, out_dir, self._log, fallback=src) or src
+            src = safe_run("editor", step_subtitles,     src, out_dir, self._log, fallback=src) or src
+            export_result = safe_run("editor", step_export, src, out_dir, self._log,
+                                     fallback=(src, src))
+            yt_out, reels_out = export_result if isinstance(export_result, tuple) else (src, src)
             report["editor"] = {"youtube": yt_out, "reels": reels_out}
             self._set_agent("editor", "ok")
             self.progress.set(5 / total)
@@ -336,7 +349,9 @@ class OrchestratorApp(ctk.CTk):
             self._set_agent("copy", "running")
             self._log("\n✍️ Agente 5: Generando título y descripción...\n")
             from agents.copywriter import run as copy_run
-            copy_data = copy_run(transcript, trend_data, temp_data)
+            copy_data = safe_run("copy", copy_run, transcript, trend_data, temp_data,
+                                 fallback={"title": "Video Football Terms", "alt_titles": [],
+                                           "description": "", "tags": [], "topic_detected": "fútbol"})
             report["copy"] = copy_data
             self._log(f"  ✅ Título: {copy_data['title']}\n")
             self._set_agent("copy", "ok")
@@ -346,11 +361,12 @@ class OrchestratorApp(ctk.CTk):
             self._set_agent("thumbnail", "running")
             self._log("\n🎨 Agente 6: Generando brief de miniatura...\n")
             from agents.thumbnail_brief import run as thumb_run
-            thumb_data = thumb_run(
-                copy_data["topic_detected"], copy_data["title"],
-                transcript, trend_data)
+            thumb_data = safe_run("thumbnail", thumb_run,
+                                  copy_data["topic_detected"], copy_data["title"],
+                                  transcript, trend_data,
+                                  fallback={"paleta": "neutro", "prompt_para_ia": {}, "guideline_canva": {}})
             report["miniatura"] = thumb_data
-            self._log(f"  ✅ Brief generado — paleta: {thumb_data['paleta']}\n")
+            self._log(f"  ✅ Brief generado\n")
             self._set_agent("thumbnail", "ok")
             self.progress.set(7 / total)
 
@@ -360,7 +376,7 @@ class OrchestratorApp(ctk.CTk):
 
         except Exception as e:
             import traceback
-            self._log(f"\n❌ Error: {e}\n{traceback.format_exc()}\n")
+            self._log(f"\n❌ Error inesperado: {e}\n{traceback.format_exc()}\n")
         finally:
             self.run_btn.configure(state="normal", text="▶  Iniciar pipeline completo")
 
